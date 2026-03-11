@@ -3,6 +3,7 @@
 set -euo pipefail
 
 pid_file="/tmp/open-daily-note.pid"
+server_file="/tmp/open-daily-note.sock"
 notes_dir="/home/ant/obsidian/300 Daily Notes"
 template_path="/home/ant/obsidian/999 Templates/Daily Note Template.md"
 note_name="$(date +%d-%m-%Y).md"
@@ -66,11 +67,12 @@ render_note() {
 if [[ -f "$pid_file" ]]; then
   pid="$(<"$pid_file")"
   if kill -0 "$pid" 2>/dev/null; then
-    kill "$pid"
-    rm -f "$pid_file"
+    if [[ -S "$server_file" ]]; then
+      nvim --server "$server_file" --remote-send '<Esc>:wq<CR>' >/dev/null 2>&1 || true
+    fi
     exit 0
   fi
-  rm -f "$pid_file"
+  rm -f "$pid_file" "$server_file"
 fi
 
 mkdir -p "$notes_dir"
@@ -84,6 +86,7 @@ if [[ ! -e "$note_path" ]]; then
   render_note "$template_path" "$note_path" "$tomorrow_block"
 fi
 
-wezterm start --always-new-process --class wezterm-float -- nvim "$note_path" &
+rm -f "$server_file"
+wezterm start --always-new-process --class wezterm-float -- nvim --listen "$server_file" "$note_path" &
 echo "$!" > "$pid_file"
 disown
