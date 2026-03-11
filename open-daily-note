@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+pid_file="/tmp/open-daily-note.pid"
+notes_dir="/home/ant/obsidian/300 Daily Notes"
+template_path="/home/ant/obsidian/999 Templates/Daily Note Template.md"
+note_name="$(date +%d-%m-%Y).md"
+note_path="${notes_dir}/${note_name}"
+previous_note_name="$(date -d yesterday +%d-%m-%Y).md"
+previous_note_path="${notes_dir}/${previous_note_name}"
+
+extract_tomorrow_block() {
+  local source_path="$1"
+
+  awk '
+    BEGIN {
+      in_tomorrow = 0
+    }
+    /^[[:space:]]*#{2,}[[:space:]]*\*?\*?[Tt]omorrow\*?\*?:?[[:space:]]*$/ {
+      in_tomorrow = 1
+      next
+    }
+    /^[[:space:]]*#{2,}[[:space:]]*\*?\*?[Nn]otes\*?\*?:?[[:space:]]*$/ {
+      in_tomorrow = 0
+    }
+    in_tomorrow {
+      print
+    }
+  ' "$source_path"
+}
+
+render_note() {
+  local template="$1"
+  local destination="$2"
+  local tomorrow_block="${3-}"
+
+  awk -v tomorrow_block="$tomorrow_block" '
+    BEGIN {
+      in_tomorrow = 0
+      inserted = 0
+      tomorrow_lines = split(tomorrow_block, tomorrow, /\n/)
+    }
+    /^[[:space:]]*#{2,}[[:space:]]*\*?\*?[Tt]omorrow\*?\*?:?[[:space:]]*$/ {
+      print
+      if (!inserted && tomorrow_block != "") {
+        for (i = 1; i <= tomorrow_lines; i++) {
+          print tomorrow[i]
+        }
+        inserted = 1
+      }
+      in_tomorrow = 1
+      next
+    }
+    /^[[:space:]]*#{2,}[[:space:]]*\*?\*?[Nn]otes\*?\*?:?[[:space:]]*$/ {
+      in_tomorrow = 0
+      print
+      next
+    }
+    !in_tomorrow {
+      print
+    }
+  ' "$template" > "$destination"
+}
+
+if [[ -f "$pid_file" ]]; then
+  pid="$(<"$pid_file")"
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid"
+    rm -f "$pid_file"
+    exit 0
+  fi
+  rm -f "$pid_file"
+fi
+
+mkdir -p "$notes_dir"
+
+if [[ ! -e "$note_path" ]]; then
+  tomorrow_block=""
+  if [[ -f "$previous_note_path" ]]; then
+    tomorrow_block="$(extract_tomorrow_block "$previous_note_path")"
+  fi
+
+  render_note "$template_path" "$note_path" "$tomorrow_block"
+fi
+
+wezterm start --always-new-process --class wezterm-float -- nvim "$note_path" &
+echo "$!" > "$pid_file"
+disown
