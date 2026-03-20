@@ -1,8 +1,5 @@
 # scripts
 
-Small local utility scripts.
-
-## Files
-
-- `open-daily-note`: create or open today's daily note in Neovim
+- `open-daily-note`: open today's daily note
+- `sysmaintenance.sh`: system maintenance
 - `windows-reboot`: reboot to Windows
