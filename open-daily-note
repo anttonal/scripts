@@ -11,21 +11,22 @@ note_path="${notes_dir}/${note_name}"
 previous_note_name="$(date -d yesterday +%d-%m-%Y).md"
 previous_note_path="${notes_dir}/${previous_note_name}"
 
-extract_tomorrow_block() {
+extract_section() {
   local source_path="$1"
+  local section_name="$2"
 
-  awk '
+  awk -v section_name="$section_name" '
     BEGIN {
-      in_tomorrow = 0
+      in_section = 0
     }
-    /^[[:space:]]*#{2,}[[:space:]]*\*?\*?[Tt]omorrow\*?\*?:?[[:space:]]*$/ {
-      in_tomorrow = 1
+    $0 ~ "^[[:space:]]*#{2,}[[:space:]]*\\*?\\*?(\\[\\[)?" section_name "(\\]\\])?\\*?\\*?:?[[:space:]]*$" {
+      in_section = 1
       next
     }
-    /^[[:space:]]*#{2,}[[:space:]]*\*?\*?[Nn]otes\*?\*?:?[[:space:]]*$/ {
-      in_tomorrow = 0
+    /^[[:space:]]*#{2,}[[:space:]]+/ {
+      in_section = 0
     }
-    in_tomorrow {
+    in_section {
       print
     }
   ' "$source_path"
@@ -34,31 +35,33 @@ extract_tomorrow_block() {
 render_note() {
   local template="$1"
   local destination="$2"
-  local tomorrow_block="${3-}"
+  local todo_block="${3-}"
 
-  awk -v tomorrow_block="$tomorrow_block" '
+  awk -v todo_block="$todo_block" '
     BEGIN {
-      in_tomorrow = 0
+      in_todo = 0
       inserted = 0
-      tomorrow_lines = split(tomorrow_block, tomorrow, /\n/)
+      todo_lines = split(todo_block, todo, /\n/)
     }
-    /^[[:space:]]*#{2,}[[:space:]]*\*?\*?[Tt]omorrow\*?\*?:?[[:space:]]*$/ {
+    /^[[:space:]]*#{2,}[[:space:]]*\*?\*?(\[\[)?[Tt][Oo][Dd][Oo](\]\])?\*?\*?:?[[:space:]]*$/ {
       print
-      if (!inserted && tomorrow_block != "") {
-        for (i = 1; i <= tomorrow_lines; i++) {
-          print tomorrow[i]
+      if (!inserted && todo_block != "") {
+        for (i = 1; i <= todo_lines; i++) {
+          print todo[i]
         }
         inserted = 1
       }
-      in_tomorrow = 1
+      in_todo = inserted
       next
     }
-    /^[[:space:]]*#{2,}[[:space:]]*\*?\*?[Nn]otes\*?\*?:?[[:space:]]*$/ {
-      in_tomorrow = 0
+    /^[[:space:]]*#{2,}[[:space:]]+/ {
+      if (in_todo) {
+        in_todo = 0
+      }
       print
       next
     }
-    !in_tomorrow {
+    !in_todo {
       print
     }
   ' "$template" > "$destination"
@@ -78,12 +81,12 @@ fi
 mkdir -p "$notes_dir"
 
 if [[ ! -e "$note_path" ]]; then
-  tomorrow_block=""
+  todo_block=""
   if [[ -f "$previous_note_path" ]]; then
-    tomorrow_block="$(extract_tomorrow_block "$previous_note_path")"
+    todo_block="$(extract_section "$previous_note_path" "[Tt]omorrow")"
   fi
 
-  render_note "$template_path" "$note_path" "$tomorrow_block"
+  render_note "$template_path" "$note_path" "$todo_block"
 fi
 
 rm -f "$server_file"
