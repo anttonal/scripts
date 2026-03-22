@@ -11,6 +11,7 @@ note_path="${notes_dir}/${note_name}"
 previous_note_name="$(date -d yesterday +%d-%m-%Y).md"
 previous_note_path="${notes_dir}/${previous_note_name}"
 
+# Pull the body of a matching markdown heading until the next heading.
 extract_section() {
   local source_path="$1"
   local section_name="$2"
@@ -32,6 +33,7 @@ extract_section() {
   ' "$source_path"
 }
 
+# Render the template and replace the TODO section with carried-over items.
 render_note() {
   local template="$1"
   local destination="$2"
@@ -67,6 +69,7 @@ render_note() {
   ' "$template" > "$destination"
 }
 
+# If an existing daily-note Neovim instance is still alive, ask it to save and quit.
 if [[ -f "$pid_file" ]]; then
   pid="$(<"$pid_file")"
   if kill -0 "$pid" 2>/dev/null; then
@@ -83,6 +86,7 @@ mkdir -p "$notes_dir"
 if [[ ! -e "$note_path" ]]; then
   todo_block=""
   if [[ -f "$previous_note_path" ]]; then
+    # Move unfinished items from yesterday's Tomorrow section into today's TODO.
     todo_block="$(extract_section "$previous_note_path" "[Tt]omorrow")"
   fi
 
@@ -90,6 +94,7 @@ if [[ ! -e "$note_path" ]]; then
 fi
 
 rm -f "$server_file"
+# Open today's note in a dedicated Neovim server so rerunning the script can close it cleanly.
 wezterm start --always-new-process --class wezterm-daily-note -- nvim --cmd 'let g:checkbox_timestamps = 1' --listen "$server_file" "$note_path" &
 echo "$!" > "$pid_file"
 disown
