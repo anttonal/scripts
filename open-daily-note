@@ -90,6 +90,6 @@ if [[ ! -e "$note_path" ]]; then
 fi
 
 rm -f "$server_file"
-wezterm start --always-new-process --class wezterm-float -- nvim --listen "$server_file" "$note_path" &
+wezterm start --always-new-process --class wezterm-daily-note -- nvim --cmd 'let g:checkbox_timestamps = 1' --listen "$server_file" "$note_path" &
 echo "$!" > "$pid_file"
 disown
