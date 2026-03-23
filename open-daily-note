@@ -33,7 +33,7 @@ extract_section() {
   ' "$source_path"
 }
 
-# Render the template and replace the TODO section with carried-over items.
+# Render the template and replace the Today/TODO section with carried-over items.
 render_note() {
   local template="$1"
   local destination="$2"
@@ -45,7 +45,7 @@ render_note() {
       inserted = 0
       todo_lines = split(todo_block, todo, /\n/)
     }
-    /^[[:space:]]*#{2,}[[:space:]]*\*?\*?(\[\[)?[Tt][Oo][Dd][Oo](\]\])?\*?\*?:?[[:space:]]*$/ {
+    /^[[:space:]]*#{2,}[[:space:]]*\*?\*?(\[\[)?([Tt][Oo][Dd][Oo]|[Tt]oday)(\]\])?\*?\*?:?[[:space:]]*$/ {
       print
       if (!inserted && todo_block != "") {
         for (i = 1; i <= todo_lines; i++) {
@@ -86,7 +86,7 @@ mkdir -p "$notes_dir"
 if [[ ! -e "$note_path" ]]; then
   todo_block=""
   if [[ -f "$previous_note_path" ]]; then
-    # Move unfinished items from yesterday's Tomorrow section into today's TODO.
+    # Move unfinished items from yesterday's Tomorrow section into today's Today/TODO section.
     todo_block="$(extract_section "$previous_note_path" "[Tt]omorrow")"
   fi
 
