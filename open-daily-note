@@ -1,31 +1,52 @@
 #!/usr/bin/env bash
 
+# Toggle today's daily note in a dedicated Neovim instance.
+# If the note server is already running, rerunning this script saves and closes it.
+# Otherwise the script creates today's note from the template, copies
+# yesterday's "## Tomorrow:" items into today's "## Today:" section, then opens
+# the file in a fresh WezTerm window and waits briefly for Neovim to start
+# listening.
+#
+# This script intentionally expects strict headings in the notes and template:
+# - "## Today:"
+# - "## Tomorrow:"
+# That keeps the parsing readable instead of trying to handle many markdown
+# variants with large regular expressions.
+#
+# The toggle logic uses a Neovim socket plus a lock file instead of a PID file.
+# That avoids stale-PID problems and prevents two quick launches from opening
+# duplicate note windows before Neovim is ready.
+
 set -euo pipefail
 
-pid_file="/tmp/open-daily-note.pid"
-server_file="/tmp/open-daily-note.sock"
-notes_dir="/home/ant/obsidian/300 Daily Notes"
-template_path="/home/ant/obsidian/999 Templates/Daily Note Template.md"
-note_name="$(date +%d-%m-%Y).md"
-note_path="${notes_dir}/${note_name}"
-previous_note_name="$(date -d yesterday +%d-%m-%Y).md"
-previous_note_path="${notes_dir}/${previous_note_name}"
+readonly lock_file="/tmp/open-daily-note.lock"
+readonly server_file="/tmp/open-daily-note.sock"
+readonly notes_dir="/home/ant/obsidian/300 Daily Notes"
+readonly template_path="/home/ant/obsidian/999 Templates/Daily Note Template.md"
+readonly note_name="$(date +%d-%m-%Y).md"
+readonly note_path="${notes_dir}/${note_name}"
+readonly previous_note_path="${notes_dir}/$(date --date='yesterday' +%d-%m-%Y).md"
 
-# Pull the body of a matching markdown heading until the next heading.
 extract_section() {
   local source_path="$1"
   local section_name="$2"
 
+  # Print the body of an exact markdown heading until the next heading.
   awk -v section_name="$section_name" '
-    BEGIN {
-      in_section = 0
+    function is_heading(line) {
+      return line ~ /^[[:space:]]*#{2,}[[:space:]]+/
     }
-    $0 ~ "^[[:space:]]*#{2,}[[:space:]]*\\*?\\*?(\\[\\[)?" section_name "(\\]\\])?\\*?\\*?:?[[:space:]]*$" {
-      in_section = 1
+
+    function heading_text(line, text) {
+      text = line
+      sub(/^[[:space:]]*#{2,}[[:space:]]*/, "", text)
+      sub(/[[:space:]]*$/, "", text)
+      return text
+    }
+
+    is_heading($0) {
+      in_section = (heading_text($0) == section_name)
       next
-    }
-    /^[[:space:]]*#{2,}[[:space:]]+/ {
-      in_section = 0
     }
     in_section {
       print
@@ -33,68 +54,106 @@ extract_section() {
   ' "$source_path"
 }
 
-# Render the template and replace the Today/TODO section with carried-over items.
-render_note() {
-  local template="$1"
-  local destination="$2"
-  local todo_block="${3-}"
+create_note() {
+  local carried_todos=""
 
-  awk -v todo_block="$todo_block" '
+  # Leave existing daily notes untouched.
+  [[ -e "$note_path" ]] && return 0
+  mkdir -p "$notes_dir"
+
+  # Reuse unfinished items from yesterday if the previous note exists.
+  if [[ -f "$previous_note_path" ]]; then
+    carried_todos="$(extract_section "$previous_note_path" "Tomorrow:")"
+  fi
+
+  # Replace the Today section in the template with the carried-over items.
+  awk -v todo_block="$carried_todos" '
+    function is_heading(line) {
+      return line ~ /^[[:space:]]*#{2,}[[:space:]]+/
+    }
+
+    function heading_text(line, text) {
+      text = line
+      sub(/^[[:space:]]*#{2,}[[:space:]]*/, "", text)
+      sub(/[[:space:]]*$/, "", text)
+      return text
+    }
+
     BEGIN {
-      in_todo = 0
-      inserted = 0
       todo_lines = split(todo_block, todo, /\n/)
     }
-    /^[[:space:]]*#{2,}[[:space:]]*\*?\*?(\[\[)?([Tt][Oo][Dd][Oo]|[Tt]oday)(\]\])?\*?\*?:?[[:space:]]*$/ {
-      print
-      if (!inserted && todo_block != "") {
-        for (i = 1; i <= todo_lines; i++) {
-          print todo[i]
+    is_heading($0) {
+      if (heading_text($0) == "Today:") {
+        print
+        if (todo_block != "") {
+          for (i = 1; i <= todo_lines; i++) {
+            print todo[i]
+          }
+          skip_section = 1
         }
-        inserted = 1
+        next
       }
-      in_todo = inserted
-      next
-    }
-    /^[[:space:]]*#{2,}[[:space:]]+/ {
-      if (in_todo) {
-        in_todo = 0
-      }
+
+      skip_section = 0
       print
       next
     }
-    !in_todo {
+    !skip_section {
       print
     }
-  ' "$template" > "$destination"
+  ' "$template_path" > "$note_path"
 }
 
-# If an existing daily-note Neovim instance is still alive, ask it to save and quit.
-if [[ -f "$pid_file" ]]; then
-  pid="$(<"$pid_file")"
-  if kill -0 "$pid" 2>/dev/null; then
-    if [[ -S "$server_file" ]]; then
-      nvim --server "$server_file" --remote-send '<Esc>:wq<CR>' >/dev/null 2>&1 || true
+server_is_alive() {
+  # The socket is the source of truth for whether the dedicated note server exists.
+  [[ -S "$server_file" ]] || return 1
+  nvim --server "$server_file" --remote-expr '1' >/dev/null 2>&1
+}
+
+close_existing_note() {
+  # Ask Neovim to save and quit, then remove the stale socket path if needed.
+  nvim --server "$server_file" --remote-send '<Esc>:wq<CR>' >/dev/null 2>&1 || true
+  rm -f "$server_file"
+}
+
+wait_for_server() {
+  local attempts="${1:-20}"
+  local delay="${2:-0.1}"
+  local i
+
+  # Avoid races where the script is run again before Neovim has bound the socket.
+  for ((i = 0; i < attempts; i++)); do
+    if server_is_alive; then
+      return 0
     fi
-    exit 0
+    sleep "$delay"
+  done
+
+  return 1
+}
+
+open_note() {
+  # Drop any stale socket path before starting a new dedicated Neovim instance.
+  rm -f "$server_file"
+  wezterm start --always-new-process --class wezterm-daily-note -- \
+    nvim --cmd 'let g:checkbox_timestamps = 1' --listen "$server_file" "$note_path" \
+    >/dev/null 2>&1 &
+  disown
+  wait_for_server || true
+}
+
+main() {
+  # Serialize runs so two fast invocations cannot both decide to open a new note.
+  exec 9>"$lock_file"
+  flock -x 9
+
+  if server_is_alive; then
+    close_existing_note
+    return 0
   fi
-  rm -f "$pid_file" "$server_file"
-fi
 
-mkdir -p "$notes_dir"
+  create_note
+  open_note
+}
 
-if [[ ! -e "$note_path" ]]; then
-  todo_block=""
-  if [[ -f "$previous_note_path" ]]; then
-    # Move unfinished items from yesterday's Tomorrow section into today's Today/TODO section.
-    todo_block="$(extract_section "$previous_note_path" "[Tt]omorrow")"
-  fi
-
-  render_note "$template_path" "$note_path" "$todo_block"
-fi
-
-rm -f "$server_file"
-# Open today's note in a dedicated Neovim server so rerunning the script can close it cleanly.
-wezterm start --always-new-process --class wezterm-daily-note -- nvim --cmd 'let g:checkbox_timestamps = 1' --listen "$server_file" "$note_path" &
-echo "$!" > "$pid_file"
-disown
+main "$@"
