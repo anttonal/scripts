@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Simple terminal countdown timer.
+# Usage:
+#   timer 300
+# Shows a MM:SS countdown and rings the terminal bell when it reaches zero.
+
+usage() {
+  printf 'Usage: %s SECONDS\n' "${0##*/}" >&2
+}
+
+main() {
+  local remaining
+
+  # Require exactly one numeric argument: the countdown length in seconds.
+  [[ $# -eq 1 ]] || {
+    usage
+    return 1
+  }
+
+  [[ $1 =~ ^[0-9]+$ ]] || {
+    usage
+    return 1
+  }
+
+  remaining=$1
+
+  # Rewrite the same line each second until the countdown finishes.
+  while ((remaining > 0)); do
+    printf '\r%02d:%02d' $((remaining / 60)) $((remaining % 60))
+    sleep 1
+    ((remaining--))
+  done
+
+  # Print the final time on its own line, then ring the terminal bell.
+  printf '\r00:00\n'
+  printf '\a'
+}
+
+main "$@"
