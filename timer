@@ -5,16 +5,27 @@ set -euo pipefail
 # Simple terminal countdown timer.
 # Usage:
 #   timer 300
+#   timer -m 5
 # Shows a MM:SS countdown and rings the terminal bell when it reaches zero.
 
 usage() {
-  printf 'Usage: %s SECONDS\n' "${0##*/}" >&2
+  printf 'Usage: %s [-m] AMOUNT\n' "${0##*/}" >&2
 }
 
 main() {
-  local remaining
+  local remaining unit_multiplier=1
 
-  # Require exactly one numeric argument: the countdown length in seconds.
+  # `-m` switches the numeric input from seconds to minutes.
+  while getopts ':m' opt; do
+    case "$opt" in
+      m) unit_multiplier=60 ;;
+      *) usage; return 1 ;;
+    esac
+  done
+
+  shift $((OPTIND - 1))
+
+  # Require exactly one numeric argument.
   [[ $# -eq 1 ]] || {
     usage
     return 1
@@ -25,7 +36,9 @@ main() {
     return 1
   }
 
-  remaining=$1
+  # Store the countdown in seconds so the display/update loop stays unchanged.
+  remaining=$((1 * unit_multiplier))
+  remaining=$((remaining * $1))
 
   # Rewrite the same line each second until the countdown finishes.
   while ((remaining > 0)); do
