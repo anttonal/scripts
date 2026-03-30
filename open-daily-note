@@ -4,7 +4,7 @@
 # If the note server is already running, rerunning this script saves and closes it.
 # Otherwise the script creates today's note from the template, copies
 # yesterday's "## Tomorrow:" items into today's "## Today:" section, then opens
-# the file in a fresh WezTerm window and waits briefly for Neovim to start
+# the file in a fresh Ghostty window and waits briefly for Neovim to start
 # listening.
 #
 # This script intentionally expects strict headings in the notes and template:
@@ -21,6 +21,8 @@ set -euo pipefail
 
 readonly lock_file="/tmp/open-daily-note.lock"
 readonly server_file="/tmp/open-daily-note.sock"
+readonly server_name_file="/tmp/open-daily-note.server"
+readonly pid_file="/tmp/open-daily-note.pid"
 readonly notes_dir="/home/ant/obsidian/300 Daily Notes"
 readonly template_path="/home/ant/obsidian/999 Templates/Daily Note Template.md"
 readonly note_name="$(date +%d-%m-%Y).md"
@@ -105,15 +107,41 @@ create_note() {
 }
 
 server_is_alive() {
-  # The socket is the source of truth for whether the dedicated note server exists.
-  [[ -S "$server_file" ]] || return 1
-  nvim --server "$server_file" --remote-expr '1' >/dev/null 2>&1
+  local server_name
+  [[ -r "$server_name_file" ]] || return 1
+
+  server_name="$(<"$server_name_file")"
+  [[ -n "$server_name" ]] || return 1
+
+  nvim --server "$server_name" --remote-expr '1' >/dev/null 2>&1
+}
+
+window_is_alive() {
+  [[ -r "$pid_file" ]] || return 1
+
+  local pid
+  pid="$(<"$pid_file")"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+
+  kill -0 "$pid" >/dev/null 2>&1
+}
+
+clear_runtime_files() {
+  rm -f "$server_file" "$server_name_file" "$pid_file"
 }
 
 close_existing_note() {
-  # Ask Neovim to save and quit, then remove the stale socket path if needed.
-  nvim --server "$server_file" --remote-send '<Esc>:wq<CR>' >/dev/null 2>&1 || true
-  rm -f "$server_file"
+  # Prefer saving and quitting through Neovim, but fall back to killing the window.
+  if server_is_alive; then
+    nvim --server "$(cat "$server_name_file")" --remote-expr 'execute("silent! wall | silent! qa")' >/dev/null 2>&1 || true
+    wait_for_server_exit || true
+  fi
+
+  if window_is_alive; then
+    kill "$(cat "$pid_file")" >/dev/null 2>&1 || true
+  fi
+
+  clear_runtime_files
 }
 
 wait_for_server() {
@@ -132,14 +160,31 @@ wait_for_server() {
   return 1
 }
 
+wait_for_server_exit() {
+  local attempts="${1:-50}"
+  local delay="${2:-0.1}"
+  local i
+
+  for ((i = 0; i < attempts; i++)); do
+    if ! server_is_alive; then
+      rm -f "$server_file"
+      return 0
+    fi
+    sleep "$delay"
+  done
+
+  return 1
+}
+
 open_note() {
   # Drop any stale socket path before starting a new dedicated Neovim instance.
-  rm -f "$server_file"
-  wezterm start --always-new-process --class wezterm-daily-note -- \
-    nvim --cmd 'let g:checkbox_timestamps = 1' --listen "$server_file" "$note_path" \
+  clear_runtime_files
+  ghostty --class=com.mitchellh.ghostty-daily-note -e \
+    nvim --cmd "let g:checkbox_timestamps = 1 | call writefile([v:servername], '$server_name_file')" --listen "$server_file" "$note_path" \
     >/dev/null 2>&1 &
+  echo "$!" > "$pid_file"
   disown
-  wait_for_server || true
+  wait_for_server 100 0.1 || window_is_alive
 }
 
 main() {
@@ -147,7 +192,7 @@ main() {
   exec 9>"$lock_file"
   flock -x 9
 
-  if server_is_alive; then
+  if server_is_alive || window_is_alive; then
     close_existing_note
     return 0
   fi

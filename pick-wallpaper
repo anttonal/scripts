@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+
+# pick-wallpaper
+# Usage: run directly or bind it in Hyprland, then choose a monitor and an image from ~/pictures.
+# The selected image is copied onto the configured hyprpaper path for that monitor, then hyprpaper is restarted.
+# Requires: wofi, hyprpaper.
+
+set -euo pipefail
+
+wall_dir="$HOME/pictures"
+hyprpaper_conf="$HOME/dotfiles/hypr/hyprpaper.conf"
+declare -a configured_targets=()
+declare -a monitors=()
+
+fail() {
+    notify-send "Wallpaper picker" "$1"
+    exit 1
+}
+
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 || fail "$1 is not available"
+}
+
+toggle_wofi() {
+    if pgrep -x "wofi" >/dev/null 2>&1; then
+        pkill -x wofi
+        exit 0
+    fi
+}
+
+load_targets() {
+    mapfile -t configured_targets < <(
+        awk '
+            /^wallpaper[[:space:]]*\{/ { in_block = 1; monitor = ""; path = "" }
+            in_block && $1 == "monitor" && $2 == "=" { monitor = $3 }
+            in_block && $1 == "path" && $2 == "=" {
+                path = substr($0, index($0, "=") + 2)
+            }
+            in_block && /^\}/ {
+                if (monitor != "" && path != "") {
+                    print monitor "|" path
+                }
+                in_block = 0
+            }
+        ' "$hyprpaper_conf"
+    )
+
+    [ "${#configured_targets[@]}" -gt 0 ] || fail "No wallpaper targets found in hyprpaper.conf"
+
+    monitors=()
+    for entry in "${configured_targets[@]}"; do
+        monitors+=("${entry%%|*}")
+    done
+}
+
+pick_monitor() {
+    {
+        printf 'all\n'
+        printf '%s\n' "${monitors[@]}"
+    } | wofi --dmenu --prompt "monitor"
+}
+
+pick_image() {
+    local selection
+    local -a images=()
+    local -a display_images=()
+
+    mapfile -t images < <(
+        find "$wall_dir" -type f \
+            \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) \
+            | sort
+    )
+
+    [ "${#images[@]}" -gt 0 ] || fail "No images found in $wall_dir"
+
+    mapfile -t display_images < <(
+        printf '%s\n' "${images[@]}" | sed "s|^$wall_dir/||"
+    )
+
+    selection=$(
+        printf '%s\n' "${display_images[@]}" | wofi --dmenu --prompt "wallpaper"
+    )
+
+    [ -n "${selection:-}" ] || exit 0
+    printf '%s\n' "$wall_dir/$selection"
+}
+
+copy_wallpaper() {
+    local source="$1"
+    local destination="$2"
+    local resolved_destination="${destination/#\~/$HOME}"
+
+    mkdir -p "$(dirname "$resolved_destination")"
+    cp -f "$source" "$resolved_destination"
+}
+
+restart_hyprpaper() {
+    pkill -x hyprpaper >/dev/null 2>&1 || true
+    hyprpaper >/dev/null 2>&1 &
+}
+
+require_cmd wofi
+require_cmd hyprpaper
+[ -f "$hyprpaper_conf" ] || fail "hyprpaper.conf not found"
+
+toggle_wofi
+load_targets
+
+monitor_selection="$(pick_monitor)"
+[ -n "${monitor_selection:-}" ] || exit 0
+
+selection="$(pick_image)"
+
+applied=0
+for entry in "${configured_targets[@]}"; do
+    monitor="${entry%%|*}"
+    destination="${entry#*|}"
+
+    if [ "$monitor_selection" = "all" ] || [ "$monitor_selection" = "$monitor" ]; then
+        copy_wallpaper "$selection" "$destination"
+        applied=1
+    fi
+done
+
+if [ "$applied" -ne 1 ]; then
+    fail "No matching monitor target found"
+fi
+
+restart_hyprpaper
+
+notify-send "Wallpaper picker" "$monitor_selection: $(basename "$selection")"
