@@ -6,7 +6,8 @@ set -euo pipefail
 # Usage:
 #   timer 300
 #   timer -m 5
-# Shows a MM:SS countdown and rings the terminal bell when it reaches zero.
+# Shows a MM:SS countdown, rings the terminal bell, and sends a notification
+# when it reaches zero.
 
 usage() {
   printf 'Usage: %s [-m] AMOUNT\n' "${0##*/}" >&2
@@ -50,6 +51,10 @@ main() {
   # Print the final time on its own line, then ring the terminal bell.
   printf '\r00:00\n'
   printf '\a'
+
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send -a timer "session finished, take a break"
+  fi
 }
 
 main "$@"

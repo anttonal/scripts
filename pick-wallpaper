@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 
 # pick-wallpaper
-# Usage: run directly or bind it in Hyprland, then choose a monitor and an image from ~/pictures.
-# The selected image is copied onto the configured hyprpaper path for that monitor, then hyprpaper is restarted.
-# Requires: wofi, hyprpaper.
+# Usage: run directly or bind it in Hyprland, then choose a monitor and an image from ~/pictures/wallpaper/favorites.
+# The selected favorite image is copied onto the configured hyprpaper path for that monitor, then hyprpaper is restarted.
+# Requires: rofi, hyprpaper.
 
 set -euo pipefail
 
-wall_dir="$HOME/pictures"
+wall_dir="$HOME/pictures/wallpaper/favorites"
 hyprpaper_conf="$HOME/dotfiles/hypr/hyprpaper.conf"
 declare -a configured_targets=()
 declare -a monitors=()
@@ -21,9 +21,9 @@ require_cmd() {
     command -v "$1" >/dev/null 2>&1 || fail "$1 is not available"
 }
 
-toggle_wofi() {
-    if pgrep -x "wofi" >/dev/null 2>&1; then
-        pkill -x wofi
+toggle_launcher() {
+    if pgrep -x "rofi" >/dev/null 2>&1; then
+        pkill -x rofi
         exit 0
     fi
 }
@@ -57,7 +57,7 @@ pick_monitor() {
     {
         printf 'all\n'
         printf '%s\n' "${monitors[@]}"
-    } | wofi --dmenu --prompt "monitor"
+    } | rofi -dmenu -p "" -theme-str 'prompt {enabled: false;}'
 }
 
 pick_image() {
@@ -74,11 +74,11 @@ pick_image() {
     [ "${#images[@]}" -gt 0 ] || fail "No images found in $wall_dir"
 
     mapfile -t display_images < <(
-        printf '%s\n' "${images[@]}" | sed "s|^$wall_dir/||"
+        printf '%s\n' "${images[@]##*/}"
     )
 
     selection=$(
-        printf '%s\n' "${display_images[@]}" | wofi --dmenu --prompt "wallpaper"
+        printf '%s\n' "${display_images[@]}" | rofi -dmenu -p "" -theme-str 'prompt {enabled: false;}'
     )
 
     [ -n "${selection:-}" ] || exit 0
@@ -99,11 +99,11 @@ restart_hyprpaper() {
     hyprpaper >/dev/null 2>&1 &
 }
 
-require_cmd wofi
+require_cmd rofi
 require_cmd hyprpaper
 [ -f "$hyprpaper_conf" ] || fail "hyprpaper.conf not found"
 
-toggle_wofi
+toggle_launcher
 load_targets
 
 monitor_selection="$(pick_monitor)"

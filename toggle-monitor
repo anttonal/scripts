@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Toggle secondary monitor DP-3 (LG ULTRAGEAR) on/off
+
+STATUS=$(hyprctl monitors all | awk '/DP-3/{found=1} found && /disabled/{print "off"; found=0} found && /1920x1080/{print "on"; found=0}')
+
+if [ "$STATUS" = "on" ]; then
+    hyprctl keyword monitor DP-3,disabled
+else
+    hyprctl keyword monitor DP-3,1920x1080@180,2560x150,1
+fi

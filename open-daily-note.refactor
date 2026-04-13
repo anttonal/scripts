@@ -2,15 +2,12 @@
 
 set -euo pipefail
 
-# Toggle today's daily note in a dedicated Ghostty + Neovim instance.
-# Re-running the script closes that instance by sending save-and-quit keys to
-# the fixed Neovim socket instead of killing the terminal process.
-
 lock_file="/tmp/open-daily-note.lock"
 server_file="/tmp/open-daily-note.sock"
 notes_dir="/home/ant/obsidian/300 Daily Notes"
 template_path="/home/ant/obsidian/999 Templates/Daily Note Template.md"
 note_path="${notes_dir}/$(date +%d-%m-%Y).md"
+previous_note_path="${notes_dir}/$(date --date='yesterday' +%d-%m-%Y).md"
 
 cleanup() {
   rm -f "$server_file"
@@ -36,7 +33,6 @@ extract_section() {
 
 create_note() {
   local carried_todos=""
-  local previous_note_path="${notes_dir}/$(date --date='yesterday' +%d-%m-%Y).md"
 
   [[ -e "$note_path" ]] && return
 
@@ -77,9 +73,10 @@ create_note() {
 }
 
 close_note() {
-  # Fire-and-forget: synchronous socket health checks made the hot path feel
-  # slow; sending keys directly to the known socket is fast enough.
-  nvim --server "$server_file" --remote-send '<Esc>:silent! noautocmd update | silent! qa<CR>' >/dev/null 2>&1 || true
+  if [[ -S "$server_file" ]]; then
+    nvim --server "$server_file" --remote-send '<Esc>:silent! noautocmd update | silent! qa<CR>' >/dev/null 2>&1 || true
+  fi
+
   cleanup
 }
 
@@ -92,20 +89,18 @@ open_note() {
 }
 
 main() {
-  # Drop duplicate keybind hits instead of queueing them.
   exec 9>"$lock_file"
   flock -xn 9 || return 0
 
   if [[ -S "$server_file" ]]; then
     close_note
     exec 9>&-
-  else
-    create_note
-    exec 9>&-
-    open_note
+    return 0
   fi
 
-  rm -f "$lock_file"
+  create_note
+  exec 9>&-
+  open_note
 }
 
 main "$@"
