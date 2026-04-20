@@ -12,6 +12,7 @@ hyprpaper_conf="$HOME/dotfiles/hypr/hyprpaper.conf"
 declare -a configured_targets=()
 declare -a monitors=()
 declare -a monitor_labels=()
+hyprctl_json=""
 
 fail() {
     notify-send "Wallpaper picker" "$1"
@@ -48,10 +49,9 @@ load_targets() {
 
     [ "${#configured_targets[@]}" -gt 0 ] || fail "No wallpaper targets found in hyprpaper.conf"
 
-    local hyprctl_json
     hyprctl_json=$(hyprctl monitors -j)
     mapfile -t monitors < <(printf '%s' "$hyprctl_json" | jq -r '.[].name')
-    mapfile -t monitor_labels < <(printf '%s' "$hyprctl_json" | jq -r '.[] | .name + "\n" + .model')
+    mapfile -t monitor_labels < <(printf '%s' "$hyprctl_json" | jq -r '.[].model')
     [ "${#monitors[@]}" -gt 0 ] || fail "No monitors found"
 }
 
@@ -63,8 +63,9 @@ pick_monitor() {
             printf '%s\n' "${monitor_labels[@]}"
         } | rofi -dmenu -p "" -theme-str 'prompt {enabled: false;}'
     )
-    # strip model subdescription line if present
-    printf '%s' "${selection%%$'\n'*}"
+    [ -z "$selection" ] && return
+    [ "$selection" = "all" ] && { printf 'all'; return; }
+    printf '%s' "$hyprctl_json" | jq -r --arg m "$selection" '.[] | select(.model == $m) | .name'
 }
 
 pick_image() {
