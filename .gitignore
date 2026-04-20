@@ -1,0 +1,15 @@
+.env
+*.env.*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+*.p12
+*.pfx
+.netrc
+.bash_history
+.zsh_history
+.*_history
+*.log
+.DS_Store
+Thumbs.db
