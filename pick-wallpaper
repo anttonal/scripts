@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
 
 # pick-wallpaper
-# Usage: run directly or bind it in Hyprland, then choose a monitor and an image from ~/pictures/wallpaper/favorites.
-# The selected favorite image is copied onto the configured hyprpaper path for that monitor, then hyprpaper is restarted.
-# Requires: rofi, hyprpaper, jq.
+# Usage: run directly or bind it in Hyprland; choose a monitor, then an image.
+# Uses hyprpaper IPC (hyprctl hyprpaper reload) — no daemon restart, no flicker.
+# Requires: rofi, hyprctl, jq.
 
 set -euo pipefail
 
 wall_dir="$HOME/pictures/wallpaper/favorites"
-hyprpaper_conf="$HOME/dotfiles/hypr/hyprpaper.conf"
-declare -a configured_targets=()
-declare -a monitors=()
-declare -a monitor_labels=()
-hyprctl_json=""
+cache_dir="$HOME/.cache/wallpaper"
+pidfile="${XDG_RUNTIME_DIR:-/tmp}/pick-wallpaper.pid"
 
 fail() {
     notify-send "Wallpaper picker" "$1"
@@ -24,117 +21,72 @@ require_cmd() {
 }
 
 toggle_launcher() {
-    if pgrep -x "rofi" >/dev/null 2>&1; then
-        pkill -x rofi
-        exit 0
+    if [[ -f "$pidfile" ]]; then
+        local old_pid
+        old_pid=$(<"$pidfile")
+        if kill -0 "$old_pid" 2>/dev/null; then
+            pkill -P "$old_pid" rofi 2>/dev/null || true
+            kill "$old_pid" 2>/dev/null || true
+            exit 0
+        fi
     fi
-}
-
-load_targets() {
-    mapfile -t configured_targets < <(
-        awk '
-            /^wallpaper[[:space:]]*\{/ { in_block = 1; monitor = ""; path = "" }
-            in_block && $1 == "monitor" && $2 == "=" { monitor = $3 }
-            in_block && $1 == "path" && $2 == "=" {
-                path = substr($0, index($0, "=") + 2)
-            }
-            in_block && /^\}/ {
-                if (monitor != "" && path != "") {
-                    print monitor "|" path
-                }
-                in_block = 0
-            }
-        ' "$hyprpaper_conf"
-    )
-
-    [ "${#configured_targets[@]}" -gt 0 ] || fail "No wallpaper targets found in hyprpaper.conf"
-
-    hyprctl_json=$(hyprctl monitors -j)
-    mapfile -t monitors < <(printf '%s' "$hyprctl_json" | jq -r '.[].name')
-    mapfile -t monitor_labels < <(printf '%s' "$hyprctl_json" | jq -r '.[].model')
-    [ "${#monitors[@]}" -gt 0 ] || fail "No monitors found"
+    printf '%s' "$$" > "$pidfile"
+    trap 'rm -f "$pidfile"' EXIT
 }
 
 pick_monitor() {
-    local selection
+    local hyprctl_json selection
+    hyprctl_json=$(hyprctl monitors -j)
     selection=$(
-        {
-            printf 'all\n'
-            printf '%s\n' "${monitor_labels[@]}"
-        } | rofi -dmenu -p "" -theme-str 'prompt {enabled: false;}'
-    )
-    [ -z "$selection" ] && return
-    [ "$selection" = "all" ] && { printf 'all'; return; }
-    printf '%s' "$hyprctl_json" | jq -r --arg m "$selection" '.[] | select(.model == $m) | .name'
+        { printf 'all\n'; printf '%s' "$hyprctl_json" | jq -r '.[] | "\(.name) (\(.model))"'; } \
+        | rofi -dmenu -p "" -theme-str 'prompt {enabled: false;}'
+    ) || return 1
+    [[ -n "$selection" ]] || return 1
+    [[ "$selection" == "all" ]] && { printf 'all'; return 0; }
+    printf '%s' "${selection%% *}"
 }
 
 pick_image() {
     local selection
-    local -a images=()
-    local -a display_images=()
-
-    mapfile -t images < <(
-        find "$wall_dir" -type f \
-            \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) \
-            | sort
-    )
-
-    [ "${#images[@]}" -gt 0 ] || fail "No images found in $wall_dir"
-
-    mapfile -t display_images < <(
-        printf '%s\n' "${images[@]##*/}"
-    )
-
+    [[ -d "$wall_dir" ]] || fail "Wall dir not found: $wall_dir"
     selection=$(
-        printf '%s\n' "${display_images[@]}" | rofi -dmenu -p "" -theme-str 'prompt {enabled: false;}'
-    )
-
-    [ -n "${selection:-}" ] || exit 0
-    printf '%s\n' "$wall_dir/$selection"
+        while IFS= read -r -d '' img; do
+            printf '%s\0icon\x1fthumbnail://%s\n' "${img##*/}" "$img"
+        done < <(find "$wall_dir" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) -print0 | sort -z) \
+        | rofi -dmenu -show-icons -p "" -theme-str 'prompt {enabled: false;}'
+    ) || return 1
+    [[ -n "$selection" ]] || return 1
+    printf '%s' "$wall_dir/$selection"
 }
 
-copy_wallpaper() {
-    local source="$1"
-    local destination="$2"
-    local resolved_destination="${destination/#\~/$HOME}"
-
-    mkdir -p "$(dirname "$resolved_destination")"
-    cp -f "$source" "$resolved_destination"
-}
-
-restart_hyprpaper() {
-    pkill -x hyprpaper >/dev/null 2>&1 || true
-    hyprpaper >/dev/null 2>&1 &
+apply_wallpaper() {
+    local monitor="$1" image="$2"
+    local err
+    if ! err=$(hyprctl hyprpaper reload "${monitor},${image}" 2>&1); then
+        fail "hyprpaper reload failed: $err"
+    fi
+    mkdir -p "$cache_dir"
+    if [[ -z "$monitor" ]]; then
+        ln -sf "$image" "$cache_dir/all"
+        while IFS= read -r mon; do
+            ln -sf "$image" "$cache_dir/$mon"
+        done < <(hyprctl monitors -j | jq -r '.[].name')
+    else
+        ln -sf "$image" "$cache_dir/$monitor"
+    fi
 }
 
 require_cmd rofi
-require_cmd hyprpaper
+require_cmd hyprctl
 require_cmd jq
-[ -f "$hyprpaper_conf" ] || fail "hyprpaper.conf not found"
 
 toggle_launcher
-load_targets
 
-monitor_selection="$(pick_monitor)"
-[ -n "${monitor_selection:-}" ] || exit 0
+monitor_selection="$(pick_monitor)" || exit 0
+image="$(pick_image)" || exit 0
 
-selection="$(pick_image)"
+ipc_monitor=""
+[[ "$monitor_selection" != "all" ]] && ipc_monitor="$monitor_selection"
 
-applied=0
-for entry in "${configured_targets[@]}"; do
-    monitor="${entry%%|*}"
-    destination="${entry#*|}"
-
-    if [ "$monitor_selection" = "all" ] || [ "$monitor_selection" = "$monitor" ]; then
-        copy_wallpaper "$selection" "$destination"
-        applied=1
-    fi
-done
-
-if [ "$applied" -ne 1 ]; then
-    fail "No matching monitor target found"
-fi
-
-restart_hyprpaper
-
-notify-send "Wallpaper picker" "$monitor_selection: $(basename "$selection")"
+apply_wallpaper "$ipc_monitor" "$image"
+notify-send "Wallpaper picker" "${monitor_selection}: $(basename "$image")"
