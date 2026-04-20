@@ -3,7 +3,7 @@
 # pick-wallpaper
 # Usage: run directly or bind it in Hyprland, then choose a monitor and an image from ~/pictures/wallpaper/favorites.
 # The selected favorite image is copied onto the configured hyprpaper path for that monitor, then hyprpaper is restarted.
-# Requires: rofi, hyprpaper.
+# Requires: rofi, hyprpaper, jq.
 
 set -euo pipefail
 
@@ -11,6 +11,7 @@ wall_dir="$HOME/pictures/wallpaper/favorites"
 hyprpaper_conf="$HOME/dotfiles/hypr/hyprpaper.conf"
 declare -a configured_targets=()
 declare -a monitors=()
+declare -a monitor_labels=()
 
 fail() {
     notify-send "Wallpaper picker" "$1"
@@ -47,17 +48,23 @@ load_targets() {
 
     [ "${#configured_targets[@]}" -gt 0 ] || fail "No wallpaper targets found in hyprpaper.conf"
 
-    monitors=()
-    for entry in "${configured_targets[@]}"; do
-        monitors+=("${entry%%|*}")
-    done
+    local hyprctl_json
+    hyprctl_json=$(hyprctl monitors -j)
+    mapfile -t monitors < <(printf '%s' "$hyprctl_json" | jq -r '.[].name')
+    mapfile -t monitor_labels < <(printf '%s' "$hyprctl_json" | jq -r '.[] | .name + "\n" + .model')
+    [ "${#monitors[@]}" -gt 0 ] || fail "No monitors found"
 }
 
 pick_monitor() {
-    {
-        printf 'all\n'
-        printf '%s\n' "${monitors[@]}"
-    } | rofi -dmenu -p "" -theme-str 'prompt {enabled: false;}'
+    local selection
+    selection=$(
+        {
+            printf 'all\n'
+            printf '%s\n' "${monitor_labels[@]}"
+        } | rofi -dmenu -p "" -theme-str 'prompt {enabled: false;}'
+    )
+    # strip model subdescription line if present
+    printf '%s' "${selection%%$'\n'*}"
 }
 
 pick_image() {
@@ -101,6 +108,7 @@ restart_hyprpaper() {
 
 require_cmd rofi
 require_cmd hyprpaper
+require_cmd jq
 [ -f "$hyprpaper_conf" ] || fail "hyprpaper.conf not found"
 
 toggle_launcher
