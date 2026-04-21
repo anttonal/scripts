@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-
-# pick-wallpaper
-# Usage: run directly or bind it in Hyprland; choose a monitor, then an image.
-# Uses hyprpaper IPC (hyprctl hyprpaper reload) — no daemon restart, no flicker.
+# pick-wallpaper: pick monitor + image via rofi, apply via hyprpaper IPC.
 # Requires: rofi, hyprctl, jq.
 
 set -euo pipefail
@@ -11,27 +8,28 @@ wall_dir="$HOME/pictures/wallpaper/favorites"
 cache_dir="$HOME/.cache/wallpaper"
 pidfile="${XDG_RUNTIME_DIR:-/tmp}/pick-wallpaper.pid"
 
-fail() {
-    notify-send "Wallpaper picker" "$1"
-    exit 1
-}
-
-require_cmd() {
-    command -v "$1" >/dev/null 2>&1 || fail "$1 is not available"
-}
+fail() { notify-send "Wallpaper picker" "$1"; exit 1; }
+require_cmd() { command -v "$1" >/dev/null 2>&1 || fail "$1 is not available"; }
 
 toggle_launcher() {
-    if [[ -f "$pidfile" ]]; then
-        local old_pid
-        old_pid=$(<"$pidfile")
-        if kill -0 "$old_pid" 2>/dev/null; then
-            pkill -P "$old_pid" rofi 2>/dev/null || true
-            kill "$old_pid" 2>/dev/null || true
-            exit 0
-        fi
+    [[ -f "$pidfile" ]] || return 0
+    local old_pid
+    old_pid=$(<"$pidfile")
+    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null \
+       && [[ -r "/proc/$old_pid/comm" ]] \
+       && [[ "$(<"/proc/$old_pid/comm")" == "rofi" ]]; then
+        kill "$old_pid" 2>/dev/null || true
+        exit 0
     fi
-    printf '%s' "$$" > "$pidfile"
-    trap 'rm -f "$pidfile"' EXIT
+    rm -f "$pidfile"
+}
+
+run_rofi() {
+    rofi "$@" &
+    local rofi_pid=$! rc=0
+    printf '%s' "$rofi_pid" > "$pidfile"
+    wait "$rofi_pid" || rc=$?
+    return $rc
 }
 
 pick_monitor() {
@@ -39,7 +37,7 @@ pick_monitor() {
     hyprctl_json=$(hyprctl monitors -j)
     selection=$(
         { printf 'all\n'; printf '%s' "$hyprctl_json" | jq -r '.[] | "\(.name) (\(.model))"'; } \
-        | rofi -dmenu -p "" -theme-str 'prompt {enabled: false;}'
+        | run_rofi -dmenu -p "" -theme-str 'prompt {enabled: false;}'
     ) || return 1
     [[ -n "$selection" ]] || return 1
     [[ "$selection" == "all" ]] && { printf 'all'; return 0; }
@@ -53,21 +51,19 @@ pick_image() {
         while IFS= read -r -d '' img; do
             printf '%s\0icon\x1fthumbnail://%s\n' "${img##*/}" "$img"
         done < <(find "$wall_dir" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) -print0 | sort -z) \
-        | rofi -dmenu -show-icons -p "" -theme-str 'prompt {enabled: false;}'
+        | run_rofi -dmenu -show-icons -p "" -theme-str 'prompt {enabled: false;}'
     ) || return 1
     [[ -n "$selection" ]] || return 1
     printf '%s' "$wall_dir/$selection"
 }
 
 apply_wallpaper() {
-    local monitor="$1" image="$2"
-    local err
+    local monitor="$1" image="$2" err
     if ! err=$(hyprctl hyprpaper reload "${monitor},${image}" 2>&1); then
         fail "hyprpaper reload failed: $err"
     fi
     mkdir -p "$cache_dir"
     if [[ -z "$monitor" ]]; then
-        ln -sf "$image" "$cache_dir/all"
         while IFS= read -r mon; do
             ln -sf "$image" "$cache_dir/$mon"
         done < <(hyprctl monitors -j | jq -r '.[].name')
@@ -81,12 +77,10 @@ require_cmd hyprctl
 require_cmd jq
 
 toggle_launcher
-
+trap 'rm -f "$pidfile"' EXIT
 monitor_selection="$(pick_monitor)" || exit 0
 image="$(pick_image)" || exit 0
-
 ipc_monitor=""
 [[ "$monitor_selection" != "all" ]] && ipc_monitor="$monitor_selection"
-
 apply_wallpaper "$ipc_monitor" "$image"
 notify-send "Wallpaper picker" "${monitor_selection}: $(basename "$image")"
