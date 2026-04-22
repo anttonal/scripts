@@ -33,14 +33,12 @@ run_rofi() {
 }
 
 pick_monitor() {
-    local hyprctl_json selection
-    hyprctl_json=$(hyprctl monitors -j)
+    local selection
     selection=$(
-        { printf 'all\n'; printf '%s' "$hyprctl_json" | jq -r '.[] | "\(.name) (\(.model))"'; } \
+        hyprctl monitors -j | jq -r '.[] | "\(.name) (\(.model))"' \
         | run_rofi -dmenu -p "" -theme-str 'prompt {enabled: false;}'
     ) || return 1
     [[ -n "$selection" ]] || return 1
-    [[ "$selection" == "all" ]] && { printf 'all'; return 0; }
     printf '%s' "${selection%% *}"
 }
 
@@ -59,17 +57,11 @@ pick_image() {
 
 apply_wallpaper() {
     local monitor="$1" image="$2" err
-    if ! err=$(hyprctl hyprpaper reload "${monitor},${image}" 2>&1); then
-        fail "hyprpaper reload failed: $err"
+    if ! err=$(hyprctl hyprpaper wallpaper "${monitor},${image}" 2>&1); then
+        fail "hyprpaper failed: $err"
     fi
     mkdir -p "$cache_dir"
-    if [[ -z "$monitor" ]]; then
-        while IFS= read -r mon; do
-            ln -sf "$image" "$cache_dir/$mon"
-        done < <(hyprctl monitors -j | jq -r '.[].name')
-    else
-        ln -sf "$image" "$cache_dir/$monitor"
-    fi
+    ln -sf "$image" "$cache_dir/$monitor"
 }
 
 require_cmd rofi
@@ -78,9 +70,7 @@ require_cmd jq
 
 toggle_launcher
 trap 'rm -f "$pidfile"' EXIT
-monitor_selection="$(pick_monitor)" || exit 0
+monitor="$(pick_monitor)" || exit 0
 image="$(pick_image)" || exit 0
-ipc_monitor=""
-[[ "$monitor_selection" != "all" ]] && ipc_monitor="$monitor_selection"
-apply_wallpaper "$ipc_monitor" "$image"
-notify-send "Wallpaper picker" "${monitor_selection}: $(basename "$image")"
+apply_wallpaper "$monitor" "$image"
+notify-send "Wallpaper picker" "${monitor}: $(basename "$image")"
