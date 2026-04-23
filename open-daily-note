@@ -61,6 +61,7 @@ create_note() {
           for (i = 1; i <= todo_count; i++) {
             print todos[i]
           }
+          print ""
           skip = 1
         }
         next
