@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-wall_dir="$HOME/pictures/wallpaper/favorites"
+wall_dir="$HOME/Pictures/wallpaper/favorites"
 cache_dir="$HOME/.cache/wallpaper"
 pidfile="${XDG_RUNTIME_DIR:-/tmp}/pick-wallpaper.pid"
 
