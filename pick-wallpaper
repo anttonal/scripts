@@ -35,10 +35,11 @@ run_rofi() {
 pick_monitor() {
     local selection
     selection=$(
-        hyprctl monitors -j | jq -r '.[] | "\(.name) (\(.model))"' \
+        { printf 'All\n'; hyprctl monitors -j | jq -r '.[] | "\(.name) (\(.model))"'; } \
         | run_rofi -dmenu -p "" -theme-str 'prompt {enabled: false;}'
     ) || return 1
     [[ -n "$selection" ]] || return 1
+    [[ "$selection" == "All" ]] && { printf 'all'; return 0; }
     printf '%s' "${selection%% *}"
 }
 
@@ -55,13 +56,24 @@ pick_image() {
     printf '%s' "$wall_dir/$selection"
 }
 
-apply_wallpaper() {
+apply_one() {
     local monitor="$1" image="$2" err
     if ! err=$(hyprctl hyprpaper wallpaper "${monitor},${image}" 2>&1); then
         fail "hyprpaper failed: $err"
     fi
-    mkdir -p "$cache_dir"
     ln -sf "$image" "$cache_dir/$monitor"
+}
+
+apply_wallpaper() {
+    local monitor="$1" image="$2"
+    mkdir -p "$cache_dir"
+    if [[ "$monitor" == "all" ]]; then
+        while IFS= read -r mon; do
+            apply_one "$mon" "$image"
+        done < <(hyprctl monitors -j | jq -r '.[].name')
+    else
+        apply_one "$monitor" "$image"
+    fi
 }
 
 require_cmd rofi
